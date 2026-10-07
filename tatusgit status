@@ -1,0 +1,23 @@
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/AppContainer.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/recording/CameraRecorder.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/recording/CameraXRecorder.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/recording/DefaultRecordingEngine.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/recording/RecordingResult.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/recording/RecordingState.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/recording/SegmentManager.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/settings/RecordingSettings.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/storage/Segment.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/storage/StorageManager.kt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/src/main/java/com/example/dashcam/ui/DashcamScreen.kt', LF will be replaced by CRLF the next time Git touches it
+ .../main/java/com/example/dashcam/AppContainer.kt  |  22 [32m+[m[31m-[m
+ .../example/dashcam/recording/CameraRecorder.kt    |  21 [32m+[m[31m-[m
+ .../example/dashcam/recording/CameraXRecorder.kt   |  53 [32m+++[m[31m-[m
+ .../dashcam/recording/DefaultRecordingEngine.kt    | 277 [32m+++++++++++++++++[m[31m----[m
+ .../example/dashcam/recording/RecordingResult.kt   |  78 [32m++++[m[31m--[m
+ .../example/dashcam/recording/RecordingState.kt    |   6 [32m+[m[31m-[m
+ .../example/dashcam/recording/SegmentManager.kt    |  34 [32m++[m[31m-[m
+ .../example/dashcam/settings/RecordingSettings.kt  |   7 [32m+[m[31m-[m
+ .../java/com/example/dashcam/storage/Segment.kt    |  74 [32m+++++[m[31m-[m
+ .../com/example/dashcam/storage/StorageManager.kt  |  24 [32m+[m[31m-[m
+ .../java/com/example/dashcam/ui/DashcamScreen.kt   |  12 [32m+[m[31m-[m
+ 11 files changed, 498 insertions(+), 110 deletions(-)

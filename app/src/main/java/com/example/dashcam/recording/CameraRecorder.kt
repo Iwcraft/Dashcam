@@ -1,8 +1,8 @@
 package com.example.dashcam.recording
 
+import android.os.ParcelFileDescriptor
 import androidx.camera.core.Preview
 import androidx.lifecycle.LifecycleOwner
-import java.io.File
 
 data class VideoConfig(
     val width: Int = 1920,
@@ -14,6 +14,9 @@ data class VideoConfig(
 /** What the camera was actually configured for, as opposed to what was requested. */
 data class BoundVideo(val description: String)
 
+/** A segment ended without a single frame, e.g. Stop was pressed right after a rollover. */
+class NoValidDataException(message: String) : IllegalStateException(message)
+
 /**
  * Thin CameraX adapter (rear camera, H.264/MP4). Knows nothing about segments, storage or
  * events, so the engine can be reasoned about without touching camera code.
@@ -24,10 +27,20 @@ interface CameraRecorder {
     suspend fun bind(owner: LifecycleOwner, config: VideoConfig): BoundVideo
 
     /**
-     * Starts writing a new MP4 to [file]. [onStarted] fires when the first frames are being
-     * written; [onFinalized] fires once the file is closed, successfully or not.
+     * Starts writing a new MP4 to [output] and ends it by itself after [durationLimitMs] of video;
+     * that is the rollover trigger. The recorder takes ownership of [output] and closes it once
+     * the file is finalized.
+     *
+     * [onStarted] fires when the first frames are being written. [onFinalized] fires once the file
+     * is closed: success also covers a segment that ended because its limit was reached, failure
+     * is a real error ([NoValidDataException] if nothing was recorded).
      */
-    fun startSegment(file: File, onStarted: () -> Unit, onFinalized: (Result<File>) -> Unit)
+    fun startSegment(
+        output: ParcelFileDescriptor,
+        durationLimitMs: Long,
+        onStarted: () -> Unit,
+        onFinalized: (Result<Unit>) -> Unit,
+    )
 
     fun finishSegment()
 

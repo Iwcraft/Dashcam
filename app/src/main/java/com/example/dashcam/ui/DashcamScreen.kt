@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.dashcam.recording.RecordingResult
 import com.example.dashcam.recording.RecordingState
+import com.example.dashcam.storage.VideoState
 import com.example.dashcam.utils.hasPermission
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -79,6 +80,12 @@ fun DashcamScreen(viewModel: DashcamViewModel = viewModel(factory = DashcamViewM
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         StatusRow(state, elapsedMs)
+        if (isRecording) {
+            Text(
+                "Saving to ${VideoState.NORMAL.displayFolder}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
@@ -161,6 +168,7 @@ private fun StatusRow(state: RecordingState, elapsedMs: Long) {
                 Box(Modifier.size(14.dp).background(Color.Red, CircleShape))
                 Text("REC  ${formatDuration(elapsedMs)}", style = MaterialTheme.typography.titleLarge)
                 Text(state.quality, style = MaterialTheme.typography.bodyMedium)
+                Text("· segment ${state.segmentNumber}", style = MaterialTheme.typography.bodyMedium)
             }
             is RecordingState.Starting -> Text("Starting camera…", style = MaterialTheme.typography.titleLarge)
             is RecordingState.Stopping -> Text("Saving…", style = MaterialTheme.typography.titleLarge)
@@ -173,8 +181,8 @@ private fun StatusRow(state: RecordingState, elapsedMs: Long) {
 @Composable
 private fun LastRecording(result: RecordingResult) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text("Last recording", style = MaterialTheme.typography.titleSmall)
-        Text(result.file.absolutePath, style = MaterialTheme.typography.bodySmall)
+        Text("Last saved segment", style = MaterialTheme.typography.titleSmall)
+        Text(result.location, style = MaterialTheme.typography.bodySmall)
         Text(
             "${formatDuration(result.durationMs)} · ${"%.1f".format(Locale.US, result.sizeBytes / 1_048_576.0)} MB",
             style = MaterialTheme.typography.bodySmall,

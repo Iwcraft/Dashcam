@@ -1,23 +1,35 @@
 package com.example.dashcam.recording
 
+import com.example.dashcam.storage.PendingSegment
 import com.example.dashcam.storage.Segment
-import java.io.File
+import com.example.dashcam.storage.VideoState
 
-/** Owns segment naming, rollover bookkeeping and protection. */
+/** Owns segment allocation, publishing and protection, on top of MediaStore. */
 interface SegmentManager {
-    /** Allocates the file for a new segment in the rolling directory. */
-    fun newSegmentFile(startTimeMs: Long): File
+    /**
+     * Creates the hidden (IS_PENDING = 1) MediaStore entry for a segment starting at [startTimeMs]
+     * and opens it for writing. Name format is unchanged: yyyyMMdd_HHmmss.mp4.
+     */
+    suspend fun newSegment(startTimeMs: Long): PendingSegment
 
-    fun onSegmentFinalized(file: File)
+    /**
+     * The recorder has finalized the file: clears IS_PENDING so it appears in Gallery/Files,
+     * measures its real size, applies any protection that was requested while it was being
+     * written, and adds it to the index. Throws if the file could not be published.
+     */
+    suspend fun onSegmentFinalized(pending: PendingSegment, durationMs: Long): Segment
 
-    /** Includes the in-progress segment. */
+    /** Removes a segment that is not worth keeping (e.g. it contains no video). */
+    suspend fun discard(pending: PendingSegment)
+
+    /** Includes the in-progress segment. Finished-but-not-yet-published segments are not listed. */
     fun segmentsOverlapping(fromMs: Long, toMs: Long): List<Segment>
 
     /**
-     * Protects all footage overlapping the range. Finalized segments are moved to the protected
-     * directory now; the in-progress segment is moved when it is finalized, because it must not
-     * be renamed while CameraX is writing it. A range extending into the future also covers
-     * segments that start later (post-event footage).
+     * Moves all footage overlapping the range to [state]'s folder (a rename, never a copy).
+     * The in-progress segment cannot be moved while CameraX writes it, so the request is
+     * remembered and applied when that segment is published; the same goes for segments that
+     * start later but overlap the range (post-event footage). Never downgrades a segment.
      */
-    suspend fun protectRange(fromMs: Long, toMs: Long)
+    suspend fun protectRange(fromMs: Long, toMs: Long, state: VideoState = VideoState.PROTECTED)
 }

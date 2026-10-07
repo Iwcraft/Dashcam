@@ -1,13 +1,14 @@
 package com.example.dashcam.recording
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.util.Range
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.FileDescriptorOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
@@ -17,7 +18,7 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.example.dashcam.utils.await
-import java.io.File
+import java.io.IOException
 
 class CameraXRecorder(private val context: Context) : CameraRecorder {
     private val mainExecutor = ContextCompat.getMainExecutor(context)
@@ -80,28 +81,60 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
         return chosen to (chosen !== candidates.first())
     }
 
-    override fun startSegment(file: File, onStarted: () -> Unit, onFinalized: (Result<File>) -> Unit) {
+    override fun startSegment(
+        output: ParcelFileDescriptor,
+        durationLimitMs: Long,
+        onStarted: () -> Unit,
+        onFinalized: (Result<Unit>) -> Unit,
+    ) {
         val capture = checkNotNull(videoCapture) { "Camera is not bound" }
         check(activeRecording == null) { "A recording is already running" }
 
+        // CameraX ends the segment itself, measured on the recorded timestamps, so every segment
+        // is the same length however busy the main thread is.
+        val options = FileDescriptorOutputOptions.Builder(output)
+            .setDurationLimitMillis(durationLimitMs)
+            .build()
+
         // No audio: it would need RECORD_AUDIO and is not part of this phase.
         activeRecording = capture.output
-            .prepareRecording(context, FileOutputOptions.Builder(file).build())
+            .prepareRecording(context, options)
             .start(mainExecutor) { event ->
                 when (event) {
                     is VideoRecordEvent.Start -> onStarted()
                     is VideoRecordEvent.Finalize -> {
                         activeRecording = null
-                        if (event.hasError()) {
-                            Log.e(TAG, "Recording finalized with error ${event.error}", event.cause)
-                            onFinalized(Result.failure(IllegalStateException(describe(event.error))))
-                        } else {
-                            onFinalized(Result.success(file))
-                        }
+                        closeQuietly(output)
+                        onFinalized(resultOf(event))
                     }
                     else -> Unit
                 }
             }
+    }
+
+    private fun resultOf(event: VideoRecordEvent.Finalize): Result<Unit> = when {
+        !event.hasError() -> Result.success(Unit)
+        // Reaching the limit is how a segment normally ends; the file is complete and playable.
+        event.error == VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED -> Result.success(Unit)
+        else -> {
+            Log.e(TAG, "Recording finalized with error ${event.error}", event.cause)
+            val message = describe(event.error)
+            Result.failure(
+                if (event.error == VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA) {
+                    NoValidDataException(message)
+                } else {
+                    IllegalStateException(message)
+                },
+            )
+        }
+    }
+
+    private fun closeQuietly(descriptor: ParcelFileDescriptor) {
+        try {
+            descriptor.close()
+        } catch (e: IOException) {
+            // Nothing useful to do if closing fails.
+        }
     }
 
     private fun describe(error: Int): String = when (error) {

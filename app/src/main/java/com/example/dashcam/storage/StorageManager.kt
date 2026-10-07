@@ -1,22 +1,24 @@
 package com.example.dashcam.storage
 
-import java.io.File
-
 interface StorageManager {
-    /** Rolling footage; files here may be deleted automatically. */
-    val rollingDir: File
+    /**
+     * Re-reads the Dashcam folders from MediaStore (one query, never the whole phone) and repairs
+     * leftovers of an interrupted recording: a finished-but-unpublished file is published, an
+     * unplayable one is removed. Call once per recording session, before the first segment.
+     */
+    suspend fun refresh()
 
-    /** Protected footage is never auto-deleted. */
-    val protectedDir: File
-
-    /** Rolling + protected. */
+    /** Normal + Protected + Event, from the cached index of real file sizes. */
     fun usedBytes(): Long
 
+    /** Free space on the phone's shared storage. */
     fun availableBytes(): Long
 
     /**
-     * Deletes the oldest unprotected segments until [usedBytes] fits [limitBytes], never touching
-     * [inProgress]. If protected footage alone exceeds the limit it deletes nothing further.
+     * Deletes the oldest NORMAL segments until [usedBytes] + [reserveBytes] fits [limitBytes]
+     * (and the phone keeps a minimum of free space). Never touches Protected/Event footage or
+     * the segment being written. If protected footage alone fills the limit, the limit part
+     * deletes nothing.
      */
-    suspend fun enforceLimit(limitBytes: Long, inProgress: File?)
+    suspend fun enforceLimit(limitBytes: Long, reserveBytes: Long = 0L)
 }
