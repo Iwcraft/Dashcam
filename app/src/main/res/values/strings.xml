@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Dashcam</string>
+    <string name="notification_channel_recording">Recording</string>
+    <string name="notification_recording_title">Dashcam active</string>
+</resources>
