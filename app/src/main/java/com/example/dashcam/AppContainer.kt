@@ -1,6 +1,7 @@
 package com.example.dashcam
 
 import android.content.Context
+import com.example.dashcam.recording.CameraXRecorder
 import com.example.dashcam.recording.DefaultRecordingEngine
 import com.example.dashcam.settings.SettingsRepository
 
@@ -16,5 +17,5 @@ class AppContainer(context: Context) {
 
     // Concrete type on purpose: RecordingService uses the service-side callbacks that are
     // not part of the UI-facing RecordingEngine interface.
-    val recordingEngine = DefaultRecordingEngine(appContext)
+    val recordingEngine = DefaultRecordingEngine(appContext, CameraXRecorder(appContext))
 }
