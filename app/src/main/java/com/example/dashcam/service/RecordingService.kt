@@ -47,6 +47,8 @@ class RecordingService : LifecycleService() {
         if (inForeground) {
             acquireWakeLock()
             container.recordingEngine.onServiceForeground(this)
+            // After the camera is requested, and fully isolated: the monitor catches its own errors.
+            container.eventMonitor.start()
         }
 
         // Not sticky: a silent restart from the background is not allowed to open the camera
@@ -55,6 +57,7 @@ class RecordingService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        container.eventMonitor.stop()
         container.recordingEngine.onServiceStopped()
         releaseWakeLock()
         super.onDestroy()

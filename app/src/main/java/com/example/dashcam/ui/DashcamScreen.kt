@@ -44,10 +44,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.dashcam.events.EventStatus
+import com.example.dashcam.events.ManualSaveStatus
 import com.example.dashcam.recording.RecordingResult
 import com.example.dashcam.recording.RecordingState
 import com.example.dashcam.storage.VideoState
 import com.example.dashcam.utils.hasPermission
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 
@@ -59,6 +63,8 @@ fun DashcamScreen(
     val context = LocalContext.current
     val state by viewModel.recordingState.collectAsStateWithLifecycle()
     val lastRecording by viewModel.lastRecording.collectAsStateWithLifecycle()
+    val lastEvent by viewModel.lastEvent.collectAsStateWithLifecycle()
+    val lastManualSave by viewModel.lastManualSave.collectAsStateWithLifecycle()
     var permissionDenied by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -128,6 +134,13 @@ fun DashcamScreen(
                 modifier = Modifier.weight(1f),
             ) { Text("Stop") }
         }
+
+        Button(onClick = viewModel::saveLastFiveMinutes, modifier = Modifier.fillMaxWidth()) {
+            Text("Save Last 5 Minutes")
+        }
+        lastManualSave?.let { ManualSaveText(it) }
+
+        lastEvent?.let { EventCard(it, onDismiss = viewModel::dismissEvent) }
 
         if (permissionDenied) {
             Text("Camera permission was denied. Recording needs it.", color = MaterialTheme.colorScheme.error)
@@ -204,6 +217,51 @@ private fun LastRecording(result: RecordingResult) {
             "${result.videoMime} · ${result.width}x${result.height}$fps"
         }
         Text(details, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun ManualSaveText(save: ManualSaveStatus) {
+    val text = when {
+        save.failed -> "Could not protect the last 5 minutes"
+        else -> save.result?.let { r ->
+            val pending = if (r.pendingSegments > 0) " (current segment is protected when it finishes)" else ""
+            "Saved ${r.protectedSegments} segment(s) to ${r.state.displayFolder}$pending"
+        } ?: ""
+    }
+    Text(text, style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun EventCard(status: EventStatus, onDismiss: () -> Unit) {
+    val e = status.event
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            Text("Possible impact detected", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+            TextButton(onClick = onDismiss) { Text("Dismiss") }
+        }
+        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(e.timestampMs))
+        Text(
+            "$time · peak ${"%.1f".format(Locale.US, e.peakAccelMps2)} m/s² (${"%.1f".format(Locale.US, e.peakAccelMps2 / 9.81f)} g)" +
+                " · rotation ${"%.1f".format(Locale.US, e.peakRotationRadPerSec)} rad/s",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        e.speedMps?.let {
+            Text("Speed ${"%.0f".format(Locale.US, it * 3.6f)} km/h (GPS)", style = MaterialTheme.typography.bodySmall)
+        }
+        if (status.extraImpacts > 0) {
+            Text("+${status.extraImpacts} more impact(s) in the same event", style = MaterialTheme.typography.bodySmall)
+        }
+        val protection = status.protection
+        val footage = when {
+            status.protectionFailed -> "Could not protect the footage"
+            protection == null -> "Protecting footage…"
+            else -> {
+                val pending = if (protection.pendingSegments > 0) "; ${protection.pendingSegments} more protected as they finish" else ""
+                "Footage protected: ${protection.protectedSegments} segment(s) in ${protection.state.displayFolder}$pending"
+            }
+        }
+        Text(footage, style = MaterialTheme.typography.bodySmall)
     }
 }
 

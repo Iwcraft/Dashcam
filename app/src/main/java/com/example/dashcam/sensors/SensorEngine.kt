@@ -1,8 +1,5 @@
 package com.example.dashcam.sensors
 
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.StateFlow
-
 /** Timestamps are wall-clock epoch ms, the same clock as segment start times. */
 data class MotionSample(
     val timestampMs: Long,
@@ -14,16 +11,38 @@ data class MotionSample(
     val gyroZ: Float,
 )
 
+/**
+ * Receives raw readings on the sensor thread. Implementations must be cheap and must not
+ * allocate: this is called ~50 times a second per sensor for as long as recording runs.
+ */
+interface MotionSink {
+    /** m/s², including gravity. */
+    fun onAccelerometer(timestampMs: Long, x: Float, y: Float, z: Float)
+
+    /** rad/s. */
+    fun onGyroscope(timestampMs: Long, x: Float, y: Float, z: Float)
+}
+
+/** What actually started. A missing sensor disables only what depends on it. */
+data class SensorAvailability(
+    val accelerometer: Boolean,
+    val gyroscope: Boolean,
+    val gps: Boolean,
+)
+
 interface SensorEngine {
-    val motion: Flow<MotionSample>
+    /**
+     * Registers the sensors (and GPS when [gpsEnabled] and permitted) and feeds [sink].
+     * Never throws: failures are logged and reported through the result. Idempotent.
+     */
+    fun start(gpsEnabled: Boolean, sink: MotionSink): SensorAvailability
 
-    /** Null when GPS is disabled or there is no fix. */
-    val speedMps: StateFlow<Float?>
-
-    fun start(gpsEnabled: Boolean)
-
+    /** Releases every sensor and the sensor thread. Idempotent. */
     fun stop()
 
-    /** Reads the rolling buffer so sensor data can be saved next to protected footage. */
+    /** Null when GPS is off, has no fix, or the last fix is stale. */
+    fun currentSpeedMps(): Float?
+
+    /** Reads the rolling in-memory buffer (about the last 20 s). Allocates; not for per-sample use. */
     fun snapshot(fromMs: Long, toMs: Long): List<MotionSample>
 }

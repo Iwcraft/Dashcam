@@ -1,12 +1,14 @@
 package com.example.dashcam.events
 
-import kotlinx.coroutines.flow.Flow
+import com.example.dashcam.sensors.MotionSink
 
-/** Consumes SensorEngine data and emits events. Does no I/O itself. */
-interface EventDetector {
-    val events: Flow<DrivingEvent>
+/** Consumes raw sensor readings and reports events. Does no I/O itself. */
+interface EventDetector : MotionSink {
+    /** False makes the detector fall back to the accelerometer alone, at a higher threshold. */
+    var gyroscopeAvailable: Boolean
 
-    fun start()
+    /** [onEvent] runs on the sensor thread: hand real work off quickly. */
+    fun start(onEvent: (DrivingEvent) -> Unit)
 
     fun stop()
 }
