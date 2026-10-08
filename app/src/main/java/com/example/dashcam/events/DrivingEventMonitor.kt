@@ -59,6 +59,10 @@ class DrivingEventMonitor(
     private val _lastManualSave = MutableStateFlow<ManualSaveStatus?>(null)
     val lastManualSave: StateFlow<ManualSaveStatus?> = _lastManualSave.asStateFlow()
 
+    /** True while a manual save runs; the UI disables the button instead of relying on the guard. */
+    private val _manualSaving = MutableStateFlow(false)
+    val manualSaving: StateFlow<Boolean> = _manualSaving.asStateFlow()
+
     private var running = false
     private val savingManually = AtomicBoolean(false)
 
@@ -111,6 +115,7 @@ class DrivingEventMonitor(
     /** Safe to press repeatedly: a press while one is running is ignored. */
     fun saveLastFiveMinutes() {
         if (!savingManually.compareAndSet(false, true)) return
+        _manualSaving.value = true
         scope.launch {
             try {
                 Log.i(EventLog.TAG, "Manual save requested")
@@ -123,6 +128,7 @@ class DrivingEventMonitor(
                 _lastManualSave.value = ManualSaveStatus(System.currentTimeMillis(), null, failed = true)
             } finally {
                 savingManually.set(false)
+                _manualSaving.value = false
             }
         }
     }

@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
@@ -26,12 +28,16 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.dashcam.recording.RecordingState
 import com.example.dashcam.settings.ImpactSensitivity
@@ -55,13 +61,17 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val state by viewModel.recordingState.collectAsStateWithLifecycle()
     val usage by viewModel.usage.collectAsStateWithLifecycle()
-    var micDenied by remember { mutableStateOf(false) }
-    var gpsDenied by remember { mutableStateOf(false) }
+    var micDenied by rememberSaveable { mutableStateOf(false) }
+    var gpsDenied by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            viewModel.refreshUsage()
-            delay(USAGE_REFRESH_MS)
+    // Only while the screen is visible: no polling while the app is in the background.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                viewModel.refreshUsage()
+                delay(USAGE_REFRESH_MS)
+            }
         }
     }
 
@@ -82,10 +92,17 @@ fun SettingsScreen(
             if (granted) viewModel.update { it.copy(audioEnabled = true) }
         }
 
-    Column(
+    // Capped width, centered: in landscape the rows stay readable instead of stretching edge to edge.
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .safeDrawingPadding()
+            .safeDrawingPadding(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+    Column(
+        modifier = Modifier
+            .widthIn(max = 640.dp)
+            .fillMaxHeight()
     ) {
         Row(
             modifier = Modifier
@@ -231,6 +248,19 @@ fun SettingsScreen(
                 },
             )
 
+            DropdownRow(
+                title = "Save button length",
+                subtitle = "How far back \"Save Last N Minutes\" reaches. Saved footage is Protected and never deleted automatically",
+                options = RecordingSettings.EMERGENCY_SAVE_OPTIONS_MS,
+                selected = settings.emergencySaveWindowMs,
+                label = ::formatMinutes,
+                onSelect = { v ->
+                    viewModel.update {
+                        it.copy(emergencySaveWindowMs = v)
+                    }
+                },
+            )
+
             InfoRow(
                 title = "Dashcam storage",
                 value = usage?.let {
@@ -317,6 +347,7 @@ fun SettingsScreen(
                 },
             )
         }
+    }
     }
 }
 

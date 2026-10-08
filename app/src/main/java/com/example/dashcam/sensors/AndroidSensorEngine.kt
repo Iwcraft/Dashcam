@@ -16,6 +16,9 @@ import android.os.SystemClock
 import android.util.Log
 import com.example.dashcam.events.EventLog
 import com.example.dashcam.utils.hasPermission
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * SensorManager + LocationManager (no Google Play services, no network). All callbacks run on
@@ -48,6 +51,9 @@ class AndroidSensorEngine(context: Context) : SensorEngine {
     private var gyroY = 0f
     private var gyroZ = 0f
     private var failureLogged = false
+
+    private val _gps = MutableStateFlow(GpsStatus())
+    override val gps: StateFlow<GpsStatus> = _gps.asStateFlow()
 
     @Volatile private var speedMps = Float.NaN
     @Volatile private var speedFixElapsedMs = 0L
@@ -82,17 +88,24 @@ class AndroidSensorEngine(context: Context) : SensorEngine {
     // All four methods are implemented on purpose: before API 30 they are abstract, not default.
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
+            val now = SystemClock.elapsedRealtime()
             speedMps = if (location.hasSpeed()) location.speed else Float.NaN
-            speedFixElapsedMs = SystemClock.elapsedRealtime()
+            speedFixElapsedMs = now
+            _gps.value = GpsStatus(GpsState.FIX, speedMps.takeUnless { it.isNaN() }, now)
         }
 
         @Deprecated("Deprecated in Java")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
 
-        override fun onProviderEnabled(provider: String) = Unit
+        override fun onProviderEnabled(provider: String) {
+            Log.i(EventLog.TAG, "GPS provider enabled; searching for a fix")
+            _gps.value = GpsStatus(GpsState.SEARCHING)
+        }
 
         override fun onProviderDisabled(provider: String) {
+            Log.w(EventLog.TAG, "GPS provider disabled; speed unavailable")
             speedMps = Float.NaN
+            _gps.value = GpsStatus(GpsState.UNAVAILABLE)
         }
     }
 
@@ -118,6 +131,7 @@ class AndroidSensorEngine(context: Context) : SensorEngine {
         val accelerometer = register(manager, Sensor.TYPE_ACCELEROMETER, handler)
         val gyroscope = register(manager, Sensor.TYPE_GYROSCOPE, handler)
         val gps = gpsEnabled && startGps(handler)
+        if (!gpsEnabled) _gps.value = GpsStatus()
 
         availability = SensorAvailability(accelerometer, gyroscope, gps)
         thread = newThread
@@ -139,6 +153,7 @@ class AndroidSensorEngine(context: Context) : SensorEngine {
         thread = null
         availability = SensorAvailability(accelerometer = false, gyroscope = false, gps = false)
         speedMps = Float.NaN
+        _gps.value = GpsStatus()
         Log.i(EventLog.TAG, "Sensor engine stopped")
     }
 
@@ -188,9 +203,14 @@ class AndroidSensorEngine(context: Context) : SensorEngine {
     }
 
     private fun startGps(handler: Handler): Boolean {
-        val manager = locationManager ?: return false
+        val manager = locationManager
+        if (manager == null) {
+            _gps.value = GpsStatus(GpsState.UNAVAILABLE)
+            return false
+        }
         if (!appContext.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
             Log.i(EventLog.TAG, "GPS is on but location permission is not granted; speed unavailable")
+            _gps.value = GpsStatus(GpsState.NO_PERMISSION)
             return false
         }
         return try {
@@ -198,12 +218,18 @@ class AndroidSensorEngine(context: Context) : SensorEngine {
             manager.requestLocationUpdates(
                 LocationManager.GPS_PROVIDER, GPS_INTERVAL_MS, 0f, locationListener, handler.looper,
             )
+            // Registered even when location is switched off, so turning it on later is noticed.
+            _gps.value = GpsStatus(
+                if (manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) GpsState.SEARCHING else GpsState.UNAVAILABLE,
+            )
             true
         } catch (e: SecurityException) {
             Log.w(EventLog.TAG, "Location permission denied; speed unavailable", e)
+            _gps.value = GpsStatus(GpsState.NO_PERMISSION)
             false
         } catch (e: IllegalArgumentException) {
             Log.w(EventLog.TAG, "No GPS provider on this device; speed unavailable", e)
+            _gps.value = GpsStatus(GpsState.UNAVAILABLE)
             false
         }
     }

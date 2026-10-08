@@ -17,7 +17,7 @@ class DefaultEmergencySaveManager(
 
     override suspend fun saveLast(): ProtectionResult {
         val now = System.currentTimeMillis()
-        val windowMs = settings.settings.value.emergencySaveWindowMs
+        val windowMs = settings.settings.value.emergencySaveWindowMs.coerceIn(MIN_WINDOW_MS, MAX_WINDOW_MS)
         return protect("manual save", now - windowMs, now, VideoState.PROTECTED)
     }
 
@@ -28,6 +28,11 @@ class DefaultEmergencySaveManager(
             event.timestampMs + EventProtection.POST_EVENT_MS,
             VideoState.EVENT,
         )
+
+    private companion object {
+        const val MIN_WINDOW_MS = 60_000L
+        const val MAX_WINDOW_MS = 30 * 60_000L
+    }
 
     private suspend fun protect(reason: String, fromMs: Long, toMs: Long, state: VideoState): ProtectionResult {
         segments.protectRange(fromMs, toMs, state)

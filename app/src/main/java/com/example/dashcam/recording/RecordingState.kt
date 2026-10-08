@@ -14,6 +14,22 @@ sealed interface RecordingState {
         val quality: String,
         /** 1-based. Changes at every rollover; [startedAtElapsedMs] does not, so the timer keeps running. */
         val segmentNumber: Int = 1,
+        /** elapsedRealtime when the current segment started; the UI derives the segment time from it. */
+        val segmentStartedAtElapsedMs: Long = startedAtElapsedMs,
+    ) : RecordingState
+
+    /**
+     * The camera failed mid-session and the engine is restarting it (bounded, with back-off).
+     * Nothing is being recorded right now. Becomes [Recording] again when a new segment starts,
+     * or [Error] when the attempts are used up or the failure cannot be retried.
+     */
+    data class Recovering(
+        val attempt: Int,
+        val maxAttempts: Int,
+        val reason: String,
+        val startedAtElapsedMs: Long,
+        val quality: String,
+        val segmentNumber: Int,
     ) : RecordingState
 
     data object Stopping : RecordingState

@@ -159,10 +159,14 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
             Log.e(TAG, "Recording finalized with error ${event.error}", event.cause)
             val message = describe(event.error)
             Result.failure(
-                if (event.error == VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA) {
-                    NoValidDataException(message)
-                } else {
-                    IllegalStateException(message)
+                when (event.error) {
+                    VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA -> NoValidDataException(message)
+                    // Retrying cannot fix these; the engine stops instead of looping.
+                    VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE,
+                    VideoRecordEvent.Finalize.ERROR_INVALID_OUTPUT_OPTIONS,
+                    VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED ->
+                        RecordingFailure(message, recoverable = false)
+                    else -> RecordingFailure(message, recoverable = true)
                 },
             )
         }
@@ -177,7 +181,7 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
     }
 
     private fun describe(error: Int): String = when (error) {
-        VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE -> "Not enough free storage"
+        VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE -> "Storage is full. Free up space or delete old Protected/Event footage"
         VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE -> "Camera stopped delivering frames"
         VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA -> "Recording was too short to contain video"
         VideoRecordEvent.Finalize.ERROR_ENCODING_FAILED -> "Video encoder failed"

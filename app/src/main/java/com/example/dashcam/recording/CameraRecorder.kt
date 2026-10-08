@@ -42,8 +42,14 @@ data class BoundVideo(
     val bitrateBps: Int,
 )
 
+/**
+ * A segment ended because of a CameraX error. [recoverable] says whether starting a fresh camera
+ * session can help; it is false for storage-full and bad-output failures, which must not be retried.
+ */
+open class RecordingFailure(message: String, val recoverable: Boolean) : IllegalStateException(message)
+
 /** A segment ended without a single frame, e.g. Stop was pressed right after a rollover. */
-class NoValidDataException(message: String) : IllegalStateException(message)
+class NoValidDataException(message: String) : RecordingFailure(message, recoverable = true)
 
 /**
  * Thin CameraX adapter (rear camera, H.264/MP4). Knows nothing about segments, storage or

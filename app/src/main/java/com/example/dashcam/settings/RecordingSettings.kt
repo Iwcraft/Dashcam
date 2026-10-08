@@ -35,15 +35,21 @@ data class RecordingSettings(
     /** How far back "Save Last 5 Minutes" reaches. */
     val emergencySaveWindowMs: Long = 5 * MINUTE_MS,
 
-    // --- Stored for later phases; nothing reads these to act yet ---
+    // --- Sensors (read by the sensor engine / impact detector) ---
+    /** Read when a recording starts; changing it mid-recording applies from the next recording. */
     val gpsEnabled: Boolean = false,
+    /** Read live by the impact detector. */
     val impactSensitivity: ImpactSensitivity = ImpactSensitivity.MEDIUM,
+
+    // --- Not implemented yet ---
+    /** Stored only. Nothing reads it: recording never starts by itself. Shown as such in Settings. */
     val autoStartRecording: Boolean = false,
 ) {
     companion object {
         val RESOLUTION_OPTIONS: List<VideoResolution> = VideoResolution.entries
         val FRAME_RATE_OPTIONS: List<Int> = listOf(30, 24)
         val SEGMENT_DURATION_OPTIONS_MS: List<Long> = listOf(1L, 3L, 5L, 10L).map { it * MINUTE_MS }
+        val EMERGENCY_SAVE_OPTIONS_MS: List<Long> = listOf(1L, 3L, 5L, 10L).map { it * MINUTE_MS }
         val STORAGE_LIMIT_OPTIONS_BYTES: List<Long> = listOf(2L, 4L, 8L, 16L, 20L).map { it * GB }
     }
 }

@@ -33,7 +33,8 @@ class MainActivity : ComponentActivity() {
                     // service never see this setting, so screen-off recording is unaffected.
                     val settings by container.settingsRepository.settings.collectAsStateWithLifecycle()
                     val state by container.recordingEngine.state.collectAsStateWithLifecycle()
-                    val keepOn = settings.keepScreenOn && state is RecordingState.Recording
+                    val keepOn = settings.keepScreenOn &&
+                        (state is RecordingState.Recording || state is RecordingState.Recovering)
                     val view = LocalView.current
                     DisposableEffect(keepOn) {
                         view.keepScreenOn = keepOn

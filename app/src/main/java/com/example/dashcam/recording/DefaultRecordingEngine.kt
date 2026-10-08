@@ -81,6 +81,14 @@ class DefaultRecordingEngine(
     private var segmentStartedAtMs = 0L
     private var watchdog: Job? = null
 
+    /** The service's lifecycle, held only while it runs so the camera can be re-bound on recovery. */
+    private var serviceOwner: LifecycleOwner? = null
+    private var recoveryJob: Job? = null
+
+    /** elapsedRealtime of each recent recovery attempt; bounds how often the camera is restarted. */
+    private val recoveryAttempts = ArrayDeque<Long>()
+    private var sessionStartedAtElapsedMs = 0L
+
     /** A failure that must end the session even though the camera itself is fine (e.g. saving failed). */
     private var sessionError: String? = null
 
@@ -91,6 +99,7 @@ class DefaultRecordingEngine(
         val current = _state.value
         if (current is RecordingState.Starting ||
             current is RecordingState.Recording ||
+            current is RecordingState.Recovering ||
             current is RecordingState.Stopping
         ) return
 
@@ -102,6 +111,8 @@ class DefaultRecordingEngine(
 
         session++
         sessionError = null
+        recoveryAttempts.clear()
+        Log.i(TAG, "Recording start requested")
         val snapshot = settings.settings.value
         // Audio needs RECORD_AUDIO; without it the session is silent rather than failing.
         sessionAudioActive = snapshot.audioEnabled && context.hasPermission(Manifest.permission.RECORD_AUDIO)
@@ -121,10 +132,26 @@ class DefaultRecordingEngine(
             is RecordingState.Recording -> {
                 // The file must be finalized before the camera is released, otherwise the MP4
                 // has no index and will not play. The finalize callback finishes the shutdown.
+                Log.i(TAG, "Stop requested")
                 _state.value = RecordingState.Stopping
                 // Between two segments nothing is recording: startNextSegment sees Stopping
                 // and finishes the shutdown itself.
                 if (activeSegment != null) recorder.finishSegment()
+            }
+            is RecordingState.Recovering -> {
+                // Nothing is being written, or a recovery segment is about to start. The recovery
+                // loop notices the state change and exits; wait for it so the camera is not
+                // re-bound after the shutdown.
+                Log.i(TAG, "Stop requested while recovering")
+                _state.value = RecordingState.Stopping
+                val mySession = session
+                scope.launch {
+                    recoveryJob?.join()
+                    if (mySession != session) return@launch
+                    // A segment that already started is ended here and its finalize callback shuts
+                    // the session down; otherwise shut down now.
+                    if (activeSegment != null) recorder.finishSegment() else finishAfterSaves(mySession)
+                }
             }
             is RecordingState.Starting -> {
                 startJob?.cancel()
@@ -142,9 +169,14 @@ class DefaultRecordingEngine(
 
     /** The service is in the foreground and [owner] is its lifecycle: safe to open the camera. */
     internal fun onServiceForeground(owner: LifecycleOwner) {
-        if (_state.value !is RecordingState.Starting) {
-            // Stop was requested before the service finished starting.
-            context.stopService(serviceIntent())
+        serviceOwner = owner
+        val current = _state.value
+        if (current !is RecordingState.Starting) {
+            // Stop was requested before the service finished starting. A repeated start command
+            // while a session is running must never shut that session down.
+            if (current is RecordingState.Idle || current is RecordingState.Error) {
+                context.stopService(serviceIntent())
+            }
             return
         }
         if (startJob?.isActive == true) return
@@ -159,6 +191,14 @@ class DefaultRecordingEngine(
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "Storage refresh failed", e)
+                }
+
+                // Make room first (also frees space when the phone is nearly full), and refuse to
+                // start at all if there still is none, before the camera is touched.
+                activeBitrateBps = VideoConfig.bitrateFor(sessionConfig.height, sessionConfig.quality)
+                enforceStorageLimit()
+                if (withContext(Dispatchers.IO) { isStorageLow() }) {
+                    throw IllegalStateException(STORAGE_FULL_MESSAGE)
                 }
 
                 val video = recorder.bind(owner, sessionConfig)
@@ -180,8 +220,9 @@ class DefaultRecordingEngine(
     }
 
     internal fun onServiceStopped() {
+        serviceOwner = null
         when (_state.value) {
-            is RecordingState.Starting, is RecordingState.Recording -> {
+            is RecordingState.Starting, is RecordingState.Recording, is RecordingState.Recovering -> {
                 // The service died while recording (not via stop()). Unbinding closes the
                 // recording; the finalize callback still saves the segment.
                 startJob?.cancel()
@@ -200,6 +241,7 @@ class DefaultRecordingEngine(
         val mySession = session
         val limitMs = segmentDurationMs()
         activeSegment = pending
+        Log.i(TAG, "Segment $segmentNumber: created ${pending.displayName}")
         try {
             recorder.startSegment(
                 output = pending.descriptor,
@@ -219,14 +261,32 @@ class DefaultRecordingEngine(
         if (mySession != session) return
         segmentStartedAtMs = System.currentTimeMillis()
 
+        val nowElapsed = SystemClock.elapsedRealtime()
         when (val current = _state.value) {
             // The session timer starts once, with the first segment, and runs across rollovers.
-            is RecordingState.Starting -> _state.value = RecordingState.Recording(
-                startedAtElapsedMs = SystemClock.elapsedRealtime(),
-                quality = quality,
+            is RecordingState.Starting -> {
+                sessionStartedAtElapsedMs = nowElapsed
+                _state.value = RecordingState.Recording(
+                    startedAtElapsedMs = nowElapsed,
+                    quality = quality,
+                    segmentNumber = segmentNumber,
+                    segmentStartedAtElapsedMs = nowElapsed,
+                )
+                Log.i(TAG, "Recording started: $quality")
+            }
+            is RecordingState.Recording -> _state.value = current.copy(
                 segmentNumber = segmentNumber,
+                segmentStartedAtElapsedMs = nowElapsed,
             )
-            is RecordingState.Recording -> _state.value = current.copy(segmentNumber = segmentNumber)
+            is RecordingState.Recovering -> {
+                Log.i(TAG, "Recovered: recording again as segment $segmentNumber")
+                _state.value = RecordingState.Recording(
+                    startedAtElapsedMs = sessionStartedAtElapsedMs,
+                    quality = quality,
+                    segmentNumber = segmentNumber,
+                    segmentStartedAtElapsedMs = nowElapsed,
+                )
+            }
             else -> Unit // Stop was already pressed
         }
 
@@ -238,8 +298,6 @@ class DefaultRecordingEngine(
             Log.w(TAG, "Segment ran past its limit; ending it")
             recorder.finishSegment()
         }
-
-        if (segmentNumber == 1) enqueue { enforceStorageLimit() }
     }
 
     private fun onSegmentFinalized(mySession: Int, pending: PendingSegment, result: Result<Unit>) {
@@ -251,16 +309,28 @@ class DefaultRecordingEngine(
         }
         val wallDurationMs = (System.currentTimeMillis() - segmentStartedAtMs).coerceAtLeast(0L)
         val failure = result.exceptionOrNull()
-        val keepRecording = isCurrentSession && failure == null && _state.value is RecordingState.Recording
+        val stateNow = _state.value
+        val live = isCurrentSession && (stateNow is RecordingState.Recording || stateNow is RecordingState.Recovering)
+        val keepRecording = live && failure == null && stateNow is RecordingState.Recording
+        // Only failures the camera layer marked as retryable; storage-full etc. end the session.
+        val recoverable = live && failure != null && (failure as? RecordingFailure)?.recoverable == true
+
+        if (failure == null) {
+            Log.i(TAG, "Segment finalized: ${pending.displayName}")
+        } else {
+            Log.w(TAG, "Segment ended with an error: ${pending.displayName}: ${failure.message}")
+        }
 
         if (keepRecording) {
             segmentNumber++
             // Next segment first: saving the finished one must never delay the camera.
             scope.launch { startNextSegment(mySession) }
+        } else if (recoverable) {
+            startRecovery(mySession, failure?.message ?: "Camera error")
         }
 
         val saved = enqueue { saveSegment(pending, failure, wallDurationMs) }
-        if (!keepRecording) {
+        if (!keepRecording && !recoverable) {
             scope.launch {
                 saved.join()
                 if (mySession == session) finishSession(failure)
@@ -282,9 +352,100 @@ class DefaultRecordingEngine(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Could not start the next segment", e)
-            sessionError = sessionError ?: "Could not start the next segment: ${e.message}"
+            sessionError = sessionError
+                ?: if (isStorageLow()) STORAGE_FULL_MESSAGE else "Could not start the next segment: ${e.message}"
             finishAfterSaves(mySession)
         }
+    }
+
+    // --- Camera recovery ---
+
+    private fun stillRecovering(mySession: Int) =
+        mySession == session && _state.value is RecordingState.Recovering
+
+    /**
+     * Restarts the camera after a retryable failure: unbind, back off, bind again, new segment.
+     * At most [MAX_RECOVERY_ATTEMPTS] attempts per [RECOVERY_WINDOW_MS], with growing pauses, so a
+     * camera that keeps failing ends the session instead of looping (and heating the phone).
+     * Cooperative: it never gets cancelled mid-step; it re-checks the state after every wait.
+     */
+    private fun startRecovery(mySession: Int, reason: String) {
+        recoveryJob = scope.launch {
+            var lastReason = reason
+            while (true) {
+                val now = SystemClock.elapsedRealtime()
+                while (recoveryAttempts.isNotEmpty() && now - recoveryAttempts.first() > RECOVERY_WINDOW_MS) {
+                    recoveryAttempts.removeFirst()
+                }
+                if (recoveryAttempts.size >= MAX_RECOVERY_ATTEMPTS) {
+                    Log.e(TAG, "Giving up: camera failed repeatedly. Last error: $lastReason")
+                    sessionError = sessionError ?: "The camera kept failing ($lastReason). Recording stopped."
+                    finishAfterSaves(mySession)
+                    return@launch
+                }
+                recoveryAttempts.addLast(now)
+                val attempt = recoveryAttempts.size
+                _state.value = RecordingState.Recovering(
+                    attempt = attempt,
+                    maxAttempts = MAX_RECOVERY_ATTEMPTS,
+                    reason = lastReason,
+                    startedAtElapsedMs = sessionStartedAtElapsedMs,
+                    quality = quality,
+                    segmentNumber = segmentNumber,
+                )
+                Log.w(TAG, "Recovery attempt $attempt/$MAX_RECOVERY_ATTEMPTS after: $lastReason")
+
+                // Waits in short slices so Stop is honoured within a fraction of a second.
+                val backoffMs = RECOVERY_BACKOFF_MS[(attempt - 1).coerceAtMost(RECOVERY_BACKOFF_MS.lastIndex)]
+                var waitedMs = 0L
+                while (waitedMs < backoffMs && stillRecovering(mySession)) {
+                    delay(BACKOFF_SLICE_MS)
+                    waitedMs += BACKOFF_SLICE_MS
+                }
+                if (!stillRecovering(mySession)) return@launch
+
+                val owner = serviceOwner
+                if (owner == null || !context.hasPermission(Manifest.permission.CAMERA)) {
+                    Log.e(TAG, "Cannot recover: camera permission or service is gone")
+                    sessionError = sessionError ?: "Camera permission was removed. Recording stopped."
+                    finishAfterSaves(mySession)
+                    return@launch
+                }
+                try {
+                    recorder.unbind()
+                    val video = recorder.bind(owner, sessionConfig)
+                    quality = video.description
+                    activeBitrateBps = video.bitrateBps
+                    val next = segmentManager.newSegment(System.currentTimeMillis())
+                    if (!stillRecovering(mySession)) {
+                        discardQuietly(next) // Stop arrived while the camera was being re-bound
+                        return@launch
+                    }
+                    segmentNumber++
+                    beginSegment(next)
+                    return@launch // onSegmentStarted flips the state back to Recording
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    lastReason = e.message ?: "Camera could not restart"
+                    Log.w(TAG, "Recovery attempt $attempt failed", e)
+                    // Stop or a service death during the attempt wins: never overwrite its state.
+                    if (!stillRecovering(mySession)) return@launch
+                    if (isStorageLow()) {
+                        sessionError = sessionError ?: STORAGE_FULL_MESSAGE
+                        finishAfterSaves(mySession)
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
+    /** True when the phone has too little free space to record. A failed check counts as "fine". */
+    private fun isStorageLow(): Boolean = try {
+        storageManager.availableBytes() < MIN_START_FREE_BYTES
+    } catch (e: Exception) {
+        false
     }
 
     /** Waits until every finished segment has been published, then shuts the session down. */
@@ -323,6 +484,7 @@ class DefaultRecordingEngine(
                 durationMs = info.durationMs.takeIf { it > 0 } ?: wallDurationMs,
             )
             _lastRecording.value = RecordingResult.of(segment, info)
+            Log.i(TAG, "Saved ${segment.displayName}: ${segment.sizeBytes / 1024} KB, ${segment.durationMs} ms")
             enforceStorageLimit()
         } catch (e: CancellationException) {
             throw e
@@ -330,7 +492,8 @@ class DefaultRecordingEngine(
             Log.e(TAG, "Could not save ${pending.displayName}", e)
             sessionError = sessionError ?: "Could not save video: ${e.message}"
             // Keep going would only produce more files that cannot be saved.
-            if (_state.value is RecordingState.Recording) stop()
+            val current = _state.value
+            if (current is RecordingState.Recording || current is RecordingState.Recovering) stop()
         }
     }
 
@@ -391,5 +554,16 @@ class DefaultRecordingEngine(
         const val MIN_SEGMENT_MS = 30_000L
         const val MAX_SEGMENT_MS = 60 * 60_000L
         const val WATCHDOG_GRACE_MS = 10_000L
+
+        /** Camera restarts allowed per window, with growing pauses: no uncontrolled restart loop. */
+        const val MAX_RECOVERY_ATTEMPTS = 3
+        const val RECOVERY_WINDOW_MS = 10 * 60_000L
+        val RECOVERY_BACKOFF_MS = longArrayOf(3_000L, 10_000L, 30_000L)
+        const val BACKOFF_SLICE_MS = 250L
+
+        /** About one segment of room; below this a session is not started. */
+        const val MIN_START_FREE_BYTES = 500L * 1024L * 1024L
+        const val STORAGE_FULL_MESSAGE =
+            "Storage is full. Free up space or delete old Protected/Event footage, then start again."
     }
 }

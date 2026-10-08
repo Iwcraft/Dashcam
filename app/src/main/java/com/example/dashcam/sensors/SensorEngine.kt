@@ -1,5 +1,7 @@
 package com.example.dashcam.sensors
 
+import kotlinx.coroutines.flow.StateFlow
+
 /** Timestamps are wall-clock epoch ms, the same clock as segment start times. */
 data class MotionSample(
     val timestampMs: Long,
@@ -23,6 +25,27 @@ interface MotionSink {
     fun onGyroscope(timestampMs: Long, x: Float, y: Float, z: Float)
 }
 
+enum class GpsState {
+    /** Not running: disabled in Settings, or the session started without it. */
+    OFF,
+    NO_PERMISSION,
+
+    /** No GPS provider, or location is switched off on the phone. */
+    UNAVAILABLE,
+    SEARCHING,
+    FIX,
+}
+
+/**
+ * What the GPS is doing right now, for the UI. [speedMps] and [lastFixElapsedMs] (elapsedRealtime)
+ * only describe the last fix; the UI decides from its age whether the signal is still fresh.
+ */
+data class GpsStatus(
+    val state: GpsState = GpsState.OFF,
+    val speedMps: Float? = null,
+    val lastFixElapsedMs: Long = 0L,
+)
+
 /** What actually started. A missing sensor disables only what depends on it. */
 data class SensorAvailability(
     val accelerometer: Boolean,
@@ -31,6 +54,9 @@ data class SensorAvailability(
 )
 
 interface SensorEngine {
+    /** Updated only when GPS state changes or a fix arrives; no polling. */
+    val gps: StateFlow<GpsStatus>
+
     /**
      * Registers the sensors (and GPS when [gpsEnabled] and permitted) and feeds [sink].
      * Never throws: failures are logged and reported through the result. Idempotent.
