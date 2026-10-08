@@ -77,6 +77,13 @@ class RecordingService : LifecycleService() {
     @SuppressLint("InlinedApi")
     private fun foregroundServiceTypes(): Int {
         var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        // Android 11+ silences a background service's microphone unless it declares this type.
+        // The engine already checked RECORD_AUDIO when it decided the session records audio.
+        if (container.recordingEngine.sessionAudioActive &&
+            hasPermission(Manifest.permission.RECORD_AUDIO)
+        ) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
         val wantsGps = container.settingsRepository.settings.value.gpsEnabled
         if (wantsGps && hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
             types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION

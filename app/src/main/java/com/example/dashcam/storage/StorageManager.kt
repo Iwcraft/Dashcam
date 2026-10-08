@@ -1,5 +1,8 @@
 package com.example.dashcam.storage
 
+/** What the Settings screen shows. [dashcamBytes] counts Dashcam-managed footage only. */
+data class StorageUsage(val dashcamBytes: Long, val freeBytes: Long)
+
 interface StorageManager {
     /**
      * Re-reads the Dashcam folders from MediaStore (one query, never the whole phone) and repairs
@@ -13,6 +16,12 @@ interface StorageManager {
 
     /** Free space on the phone's shared storage. */
     fun availableBytes(): Long
+
+    /**
+     * Cheap enough to call every few seconds: the Dashcam folders are queried once (first call),
+     * after that this reads the cached index plus one StatFs. Never scans the rest of the phone.
+     */
+    suspend fun usage(): StorageUsage
 
     /**
      * Deletes the oldest NORMAL segments until [usedBytes] + [reserveBytes] fits [limitBytes]

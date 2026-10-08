@@ -52,7 +52,10 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 
 @Composable
-fun DashcamScreen(viewModel: DashcamViewModel = viewModel(factory = DashcamViewModel.Factory)) {
+fun DashcamScreen(
+    onOpenSettings: () -> Unit,
+    viewModel: DashcamViewModel = viewModel(factory = DashcamViewModel.Factory),
+) {
     val context = LocalContext.current
     val state by viewModel.recordingState.collectAsStateWithLifecycle()
     val lastRecording by viewModel.lastRecording.collectAsStateWithLifecycle()
@@ -79,7 +82,14 @@ fun DashcamScreen(viewModel: DashcamViewModel = viewModel(factory = DashcamViewM
         modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        StatusRow(state, elapsedMs)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            StatusRow(state, elapsedMs)
+            TextButton(onClick = onOpenSettings) { Text("Settings") }
+        }
         if (isRecording) {
             Text(
                 "Saving to ${VideoState.NORMAL.displayFolder}",

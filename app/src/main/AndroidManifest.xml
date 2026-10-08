@@ -7,10 +7,14 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Only requested at runtime when the user turns on "Audio recording" in Settings. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Foreground service: the base permission plus one per declared type on API 34+. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- Optional GPS. Android 12+ requires COARSE to be declared alongside FINE. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -43,6 +47,6 @@
         <service
             android:name=".service.RecordingService"
             android:exported="false"
-            android:foregroundServiceType="camera|location" />
+            android:foregroundServiceType="camera|location|microphone" />
     </application>
 </manifest>

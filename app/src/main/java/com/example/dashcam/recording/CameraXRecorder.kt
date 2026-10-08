@@ -1,5 +1,7 @@
 package com.example.dashcam.recording
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -12,12 +14,14 @@ import androidx.camera.video.FileDescriptorOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
+import androidx.camera.video.PendingRecording
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.example.dashcam.utils.await
+import com.example.dashcam.utils.hasPermission
 import java.io.IOException
 
 class CameraXRecorder(private val context: Context) : CameraRecorder {
@@ -29,6 +33,8 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
     // Must be held: a Recording that is garbage collected finalizes with an error.
     private var activeRecording: Recording? = null
     private var previewProvider: Preview.SurfaceProvider? = null
+    /** Fixed for the session at bind time, like resolution and frame rate. */
+    private var audioEnabled = false
 
     private class Rung(val quality: Quality, val height: Int)
 
@@ -41,17 +47,45 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
             ?: throw IllegalStateException("No rear camera found")
 
         val (rung, isFallback) = chooseQuality(cameraInfo, config)
-
-        val recorder = Recorder.Builder()
-            .setQualitySelector(QualitySelector.from(rung.quality))
-            .setTargetVideoEncodingBitRate(config.bitrateBps)
-            .build()
-        // A target, not a guarantee: CameraX picks the closest range the camera supports.
-        val capture = VideoCapture.Builder(recorder)
-            .setTargetFrameRate(Range(config.frameRate, config.frameRate))
-            .build()
+        val bitrate = VideoConfig.bitrateFor(rung.height, config.quality)
 
         provider.unbindAll()
+        // The frame rate is a target, not a guarantee: CameraX picks the closest range the camera
+        // supports. If the camera rejects the combination outright, retry once with its default
+        // frame rate: recording at the wrong fps beats not recording.
+        var fpsNote = "${config.frameRate} fps target"
+        val capture = try {
+            bindUseCases(provider, owner, selector, rung, bitrate, config.frameRate)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "Frame rate ${config.frameRate} rejected, using the camera default", e)
+            provider.unbindAll()
+            fpsNote = "default fps"
+            bindUseCases(provider, owner, selector, rung, bitrate, null)
+        }
+        videoCapture = capture
+        audioEnabled = config.audioEnabled
+
+        val description = "${rung.height}p" + if (isFallback) " (fallback)" else ""
+        Log.i(TAG, "Bound rear camera: $description, $fpsNote, ${bitrate / 1000} kbps, audio=$audioEnabled")
+        return BoundVideo(description, bitrate)
+    }
+
+    private fun bindUseCases(
+        provider: ProcessCameraProvider,
+        owner: LifecycleOwner,
+        selector: CameraSelector,
+        rung: Rung,
+        bitrateBps: Int,
+        frameRate: Int?,
+    ): VideoCapture<Recorder> {
+        val recorder = Recorder.Builder()
+            .setQualitySelector(QualitySelector.from(rung.quality))
+            .setTargetVideoEncodingBitRate(bitrateBps)
+            .build()
+        val capture = VideoCapture.Builder(recorder)
+            .apply { if (frameRate != null) setTargetFrameRate(Range(frameRate, frameRate)) }
+            .build()
+
         val previewUseCase = Preview.Builder().build().also { it.setSurfaceProvider(previewProvider) }
         preview = try {
             provider.bindToLifecycle(owner, selector, previewUseCase, capture)
@@ -63,11 +97,7 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
             provider.bindToLifecycle(owner, selector, capture)
             null
         }
-        videoCapture = capture
-
-        val description = "${rung.height}p" + if (isFallback) " (fallback)" else ""
-        Log.i(TAG, "Bound rear camera: $description @ ${config.frameRate} fps target")
-        return BoundVideo(description)
+        return capture
     }
 
     // Deprecated in favour of Recorder.getVideoCapabilities but still functional and simpler.
@@ -96,9 +126,10 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
             .setDurationLimitMillis(durationLimitMs)
             .build()
 
-        // No audio: it would need RECORD_AUDIO and is not part of this phase.
-        activeRecording = capture.output
-            .prepareRecording(context, options)
+        // Audio is off unless the session asked for it AND the permission is still granted;
+        // otherwise the recording stays silent instead of failing.
+        val pending = capture.output.prepareRecording(context, options)
+        activeRecording = withAudioIfAllowed(pending)
             .start(mainExecutor) { event ->
                 when (event) {
                     is VideoRecordEvent.Start -> onStarted()
@@ -111,6 +142,14 @@ class CameraXRecorder(private val context: Context) : CameraRecorder {
                 }
             }
     }
+
+    @SuppressLint("MissingPermission") // checked on the line above the call
+    private fun withAudioIfAllowed(pending: PendingRecording): PendingRecording =
+        if (audioEnabled && context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
+            pending.withAudioEnabled()
+        } else {
+            pending
+        }
 
     private fun resultOf(event: VideoRecordEvent.Finalize): Result<Unit> = when {
         !event.hasError() -> Result.success(Unit)

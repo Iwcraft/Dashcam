@@ -47,6 +47,14 @@ internal class MediaStoreStorageManager(
         return StatFs(path).availableBytes
     }
 
+    override suspend fun usage(): StorageUsage {
+        index.ensureLoaded()
+        return StorageUsage(
+            dashcamBytes = index.totalBytes(),
+            freeBytes = withContext(Dispatchers.IO) { availableBytes() },
+        )
+    }
+
     override suspend fun enforceLimit(limitBytes: Long, reserveBytes: Long) {
         index.ensureLoaded()
         val all = index.snapshot()

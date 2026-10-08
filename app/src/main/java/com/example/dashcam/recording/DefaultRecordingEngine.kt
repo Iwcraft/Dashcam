@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.example.dashcam.service.RecordingService
 import com.example.dashcam.settings.SettingsRepository
+import com.example.dashcam.settings.VideoQuality
 import com.example.dashcam.storage.PendingSegment
 import com.example.dashcam.storage.StorageManager
 import com.example.dashcam.utils.hasPermission
@@ -43,7 +44,6 @@ class DefaultRecordingEngine(
     private val segmentManager: SegmentManager,
     private val storageManager: StorageManager,
     private val settings: SettingsRepository,
-    private val videoConfig: VideoConfig = VideoConfig(),
 ) : RecordingEngine {
     // Process-wide scope: recording must outlive any Activity or ViewModel.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -59,6 +59,23 @@ class DefaultRecordingEngine(
     /** Bumped on every start, so a late callback from an old session cannot touch a new one. */
     private var session = 0
     private var quality = ""
+
+    /**
+     * Resolution, frame rate, quality and audio are read once per session, when Start is pressed,
+     * so a settings change never touches a running camera. Segment duration and the storage limit
+     * are read live, so they apply from the next segment.
+     */
+    private var sessionConfig = VideoConfig()
+
+    /** Bitrate actually set on the encoder (after any resolution fallback). */
+    private var activeBitrateBps = VideoConfig.bitrateFor(1080, VideoQuality.HIGH)
+
+    /**
+     * True when this session records microphone audio. The service reads it to decide whether to
+     * declare the microphone foreground-service type, so it must be decided here, once.
+     */
+    var sessionAudioActive = false
+        private set
     private var segmentNumber = 0
     private var activeSegment: PendingSegment? = null
     private var segmentStartedAtMs = 0L
@@ -85,6 +102,10 @@ class DefaultRecordingEngine(
 
         session++
         sessionError = null
+        val snapshot = settings.settings.value
+        // Audio needs RECORD_AUDIO; without it the session is silent rather than failing.
+        sessionAudioActive = snapshot.audioEnabled && context.hasPermission(Manifest.permission.RECORD_AUDIO)
+        sessionConfig = VideoConfig.from(snapshot, sessionAudioActive)
         _state.value = RecordingState.Starting
         try {
             ContextCompat.startForegroundService(context, serviceIntent())
@@ -140,8 +161,9 @@ class DefaultRecordingEngine(
                     Log.w(TAG, "Storage refresh failed", e)
                 }
 
-                val video = recorder.bind(owner, videoConfig)
+                val video = recorder.bind(owner, sessionConfig)
                 quality = video.description
+                activeBitrateBps = video.bitrateBps
                 segmentNumber = 1
                 beginSegment(segmentManager.newSegment(System.currentTimeMillis()))
             } catch (e: CancellationException) {
@@ -316,7 +338,7 @@ class DefaultRecordingEngine(
         try {
             val limit = settings.settings.value.storageLimitBytes
             // Room for the segment being written, so the cap is respected when it is finished.
-            val reserve = videoConfig.bitrateBps / 8L * (segmentDurationMs() / 1000L) * 12L / 10L
+            val reserve = activeBitrateBps / 8L * (segmentDurationMs() / 1000L) * 12L / 10L
             storageManager.enforceLimit(limit, reserve)
         } catch (e: CancellationException) {
             throw e
@@ -358,7 +380,7 @@ class DefaultRecordingEngine(
         context.stopService(serviceIntent())
     }
 
-    /** Settings can later offer 1/3/5/10 minutes; anything outside sane bounds is clamped. */
+    /** Settings offer 1/3/5/10 minutes; anything outside sane bounds is clamped. */
     private fun segmentDurationMs(): Long =
         settings.settings.value.segmentDurationMs.coerceIn(MIN_SEGMENT_MS, MAX_SEGMENT_MS)
 
